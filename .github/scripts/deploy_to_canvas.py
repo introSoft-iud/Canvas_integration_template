@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import os
-import re
 from canvasapi import Canvas
 from bs4 import BeautifulSoup
 from pathlib import Path
@@ -16,59 +15,58 @@ course = canvas.get_course(COURSE_ID)
 site_dir = Path("site")
 pages_created = 0
 
-# Limpiar páginas antiguas que empiecen con [MkDocs]
-print("Eliminando páginas antiguas del sitio MkDocs...")
+print("Eliminando páginas antiguas del sitio MkDocs (excepto la Front Page)...")
 for page in course.get_pages():
     if page.title.startswith("[MkDocs]"):
-        page.delete()
+        # Si es la página de inicio del curso, la desmarcamos primero
+        if getattr(page, "front_page", False):
+            print(f"  Desmarcando Front Page: {page.title}")
+            page.edit(wiki_page={"front_page": False})
         print(f"  Eliminada: {page.title}")
+        page.delete()
 
-# Subir todas las páginas del build
+print("\nSubiendo las nuevas páginas...")
 for html_file in site_dir.rglob("*.html"):
     rel_path = html_file.relative_to(site_dir)
     url_slug = str(rel_path.parent / html_file.stem).replace("\\", "/")
-    if url_slug == "index":  # página de inicio
+    if url_slug == "index":
         url_slug = "inicio-mkdocs"
-    
-    title = "[MkDocs] " + " → ".join(rel_path.parts[:-1]).replace("index", "Inicio")
-    if title == "[MkDocs] ":
-        title = "[MkDocs] Inicio"
+
+    title = "[Docs] " + " → ".join(part.capitalize() for part in rel_path.parts[:-1] if part != "index")
+    if not title.strip("[Docs] "):
+        title = "[Docs] Inicio"
 
     with open(html_file, encoding="utf-8") as f:
         body = f.read()
 
-    # Corregir rutas relativas de CSS/JS/imágenes
+    # Pequeña limpieza de rutas relativas (suficiente para Material + MathJax)
     soup = BeautifulSoup(body, "html.parser")
-    base_url = f"https://{API_URL.split('//')[1]}courses/{COURSE_ID}/file_ref/"
-    
     for tag in soup.find_all(["link", "script", "img"]):
         attr = "href" if tag.has_attr("href") else "src"
-        if tag.get(attr) and tag[attr] and not tag[attr].startswith(("http", "https", "#")):
-            # Para CSS/JS/imágenes, subimos como archivos a Canvas y linkeamos
-            # Pero para simplicidad inicial, ajustamos a rutas relativas (puedes expandir esto)
-            tag[attr] = tag[attr].lstrip('./')  # Simplificado; para prod, sube assets primero
+        if tag.get(attr) and not tag[attr].startswith(("http", "https", "#", "data:")):
+            tag[attr] = tag[attr].lstrip("./")
 
     body = str(soup)
 
-    # Crear o actualizar la página en Canvas
+    # Crear o actualizar página
     try:
         page = course.create_page({
             "title": title,
             "body": body,
             "published": True,
+            "url": url_slug,
             "front_page": (url_slug == "inicio-mkdocs")
         })
-        print(f"  Creada: {title}")
+        print(f"  ✓ {title}")
         pages_created += 1
     except Exception as e:
-        print(f"  Error en {title}: {e}")
-        # Si falla, intenta actualizar si existe
-        try:
-            existing_page = course.get_page_by_title(title)
-            existing_page.update(body=body)
-            print(f"  Actualizada: {title}")
-        except:
-            print(f"  No se pudo crear/actualizar: {title}")
+        # Si ya existe, la actualizamos
+        if "already exists" in str(e):
+            existing = course.get_page(url_slug)
+            existing.edit(wiki_page={"body": body, "published": True})
+            print(f"  ↻ Actualizada: {title}")
+        else:
+            print(f"  ✗ Error {title}: {e}")
 
-print(f"\n¡Listo! {pages_created} páginas desplegadas en Canvas")
-print(f"Ve a: {API_URL}/courses/{COURSE_ID}")
+print(f"\n¡Terminado! {pages_created} páginas en tu curso Canvas")
+print(f"URL directa → {API_URL}/courses/{COURSE_ID}/pages/inicio-mkdocs")
