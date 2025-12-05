@@ -5,14 +5,18 @@ from canvasapi import Canvas
 from bs4 import BeautifulSoup
 from pathlib import Path
 
-API_URL = os.environ["CANVAS_URL"]
+API_URL = os.environ["CANVAS_URL"].rstrip("/")
 API_KEY = os.environ["CANVAS_TOKEN"]
 COURSE_ID = int(os.environ["CANVAS_COURSE_ID"])
 
 canvas = Canvas(API_URL, API_KEY)
 course = canvas.get_course(COURSE_ID)
 site_dir = Path("site")
-uploaded_files = {}  # cache: ruta local → URL pública en Canvas
+
+# Carpeta donde guardaremos todos los assets en Canvas
+ASSETS_FOLDER = "mkdocs-assets"
+
+uploaded = {}  # local_path → URL pública en Canvas
 
 print("1. Limpiando páginas antiguas [Docs]...")
 for page in course.get_pages():
@@ -21,33 +25,41 @@ for page in course.get_pages():
             page.edit(wiki_page={"front_page": False})
         page.delete()
 
-print("2. Subiendo archivos estáticos (css/js/img/font)...")
-def upload_file_to_canvas(local_path):
-    if str(local_path) in uploaded_files:
-        return uploaded_files[str(local_path)]
-    
-    mime_type, _ = mimetypes.guess_type(local_path)
-    if not mime_type:
-        mime_type = "application/octet-stream"
-    
-    file = course.upload_file(
+def upload_asset(local_path: Path) -> str:
+    if str(local_path) in uploaded:
+        return uploaded[str(local_path)]
+
+    # Subir archivo paso a paso (canvasapi necesita dos pasos)
+    filename = local_path.name
+    relative_folder = local_path.relative_to(site_dir).parent
+    canvas_folder_path = f"{ASSETS_FOLDER}/{relative_folder}".replace("\\", "/")
+
+    # Paso 1: iniciar upload
+    upload_resp = course.upload(
+        filename,
         str(local_path),
-        name=local_path.name,
-        parent_folder_path="mkdocs-assets/" + str(local_path.parent.relative_to(site_dir))
+        parent_folder_path=canvas_folder_path,
+        on_duplicate="overwrite"
     )
-    public_url = file[1]["url"]  # URL pública directa
-    uploaded_files[str(local_path)] = public_url
+    # upload devuelve (success_bool, response_dict)
+    if not upload_resp[0]:
+        print(f"Falló subida de {local_path}")
+        return str(local_path)
+
+    public_url = upload_resp[1]["url"]
+    uploaded[str(local_path)] = public_url
     print(f"   ↑ {local_path.relative_to(site_dir)}")
     return public_url
 
-# Subir todos los archivos que NO sean *.html
+print("\n2. Subiendo assets (css/js/img/font)...")
 for asset in site_dir.rglob("*"):
-    if asset.is_file() and asset.suffix != ".html":
-        upload_file_to_canvas(asset)
+    if asset.is_file() and asset.suffix.lower() != ".html":
+        upload_asset(asset)
 
-print("\n3. Subiendo páginas HTML (con rutas corregidas)...\n")
+print("\n3. Subiendo páginas HTML...\n")
 for html_file in site_dir.rglob("index.html"):
     rel_dir = html_file.relative_to(site_dir).parent
+
     if rel_dir == Path("."):
         url_slug = "inicio-mkdocs"
         title = "[Docs] Inicio"
@@ -55,23 +67,17 @@ for html_file in site_dir.rglob("index.html"):
         title = "[Docs] " + " → ".join(p.capitalize() for p in rel_dir.parts)
         url_slug = str(rel_dir).replace("\\", "/")
 
-    with open(html_file, encoding="utf-8") as f:
-        body = f.read()
-
+    body = html_file.read_text(encoding="utf-8")
     soup = BeautifulSoup(body, "html.parser")
-    
-    # Reemplazar todas las rutas locales por URLs públicas de Canvas
+
+    # Reemplazar rutas locales por URLs públicas de Canvas
     for tag in soup.find_all(["link", "script", "img", "source"]):
         attr = "href" if tag.has_attr("href") else "src"
         src = tag.get(attr)
         if src and not src.startswith(("http", "#", "data:", "mailto")):
-            # Ruta relativa → convertir a Path absoluto dentro de site/
             asset_path = (html_file.parent / src.lstrip("./")).resolve()
             if asset_path.exists():
-                canvas_url = upload_file_to_canvas(asset_path)
-                tag[attr] = canvas_url
-            else:
-                tag[attr] = src  # dejar como está si no existe
+                tag[attr] = upload_asset(asset_path)
 
     body = str(soup)
 
@@ -90,7 +96,7 @@ for html_file in site_dir.rglob("index.html"):
             existing.edit(wiki_page={"body": body})
             print(f"  ↻ {title} actualizada")
         else:
-            print(f"  ✗ Error {title}: {e}")
+            print(f"  ✗ {title}: {e}")
 
-print(f"\n¡VERSIÓN PRO 100% FUNCIONANDO!")
+print(f"\n¡VERSIÓN PRO FUNCIONANDO AL 100%!")
 print(f"→ {API_URL}/courses/{COURSE_ID}/pages/inicio-mkdocs")
