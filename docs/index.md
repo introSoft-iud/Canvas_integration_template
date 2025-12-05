@@ -12,3 +12,4 @@ def hola():
     return "¡Esto funciona perfecto!"
 print(hola())
 ```
+Este material se despliega automáticamente utilizando GitHub Actions, tomando archivos `.md` como fuente de verdad. Funciona como una prueba de concepto, pero aún es necesario mejorar algunas funcionalidades, como la capacidad de navegar entre páginas.
