@@ -2,7 +2,7 @@
 
 ¡Sí, funcionó!
 
-Ecuación en línea: $e^{i\pi} + 1 = 0$
+Ecuación en línea: $e^{i\pi} + 1 = 0$ mknk
 
 Lista bonita:
 - MkDocs + Material
